@@ -34,7 +34,7 @@
 
 | 設定項目       | 内容                                    |
 | ---------- | --------------------------------------- |
-| 認証プロバイダー   | Google（柳井のGoogleアカウント）                 |
+| 認証プロバイダー   | Google                 |
 | 保護対象パス     | `/admin/*`、`/api/requests/:id/*`、`/api/containers/*` |
 | 保護対象外パス    | `/apply`、`/apply/done`、`/api/requests`（POST） |
 | 管理者特定      | Cloudflare Accessのポリシーで特定メールアドレスを許可    |
