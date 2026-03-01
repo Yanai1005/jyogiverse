@@ -1,0 +1,79 @@
+# ===================
+# Node.js / npm
+# ===================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ===================
+# Build Output
+# ===================
+dist/
+build/
+.output/
+.astro/
+
+# ===================
+# Cloudflare / Wrangler
+# ===================
+# ローカル開発用シークレット（絶対にコミットしない）
+.dev.vars
+.dev.vars.*
+
+# Wranglerのキャッシュ・一時ファイル
+.wrangler/
+
+# ===================
+# 環境変数・シークレット
+# ===================
+.env
+.env.*
+!.env.example
+
+# ===================
+# Cloudflare Tunnel 認証情報
+# ===================
+# cloudflaredのトンネルトークン・証明書（infra/cloudflare/以下）
+infra/cloudflare/*.json
+infra/cloudflare/*.pem
+infra/cloudflare/cert.pem
+
+# ===================
+# SSH・秘密鍵
+# ===================
+*.pem
+*.key
+id_rsa
+id_ed25519
+*.ppk
+
+# ===================
+# Proxmox / インフラ設定
+# ===================
+# スクリプト内で生成される一時ファイル
+infra/scripts/*.tmp
+infra/scripts/*.log
+
+# ===================
+# macOS
+# ===================
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ===================
+# エディタ・IDE
+# ===================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ===================
+# ログ
+# ===================
+*.log
+logs/
