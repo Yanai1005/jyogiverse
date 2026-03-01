@@ -83,5 +83,20 @@
     "name": "not-reviewed",
     "color": "F9C1CF",
     "description": "未レビュー"
-  }
+  },
+  {
+  "name": "priority: high",
+  "color": "D93F0B",
+  "description": "優先度: 高"
+},
+{
+  "name": "priority: medium",
+  "color": "FBCA04",
+  "description": "優先度: 中"
+},
+{
+  "name": "priority: low",
+  "color": "0E8A16",
+  "description": "優先度: 低"
+}
 ]
