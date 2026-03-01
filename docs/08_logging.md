@@ -4,42 +4,93 @@
 
 # 0️⃣ 設計前提
 
-| 項目     | 内容                                                         |
-| ------ | ------------------------------------------------------------ |
-| 対象システム | アプリLXC（systemd journal）/ 管理UI（Cloudflare Workers Logs）     |
-| ログ方式   | systemd journal（インフラ）/ Workers console.log（管理UI）           |
-| 集約方式   | 分散管理（Phase 1〜2）→ 管理UIにログ確認画面を追加（Phase 3以降）               |
-| 保持期間   | systemd: デフォルト（再起動でリセットされないよう persistent 設定推奨）/ Workers: 7日 |
-| 個人情報   | メールアドレスはログ出力時にマスキング                                        |
+| 項目     | 内容                                                     |
+| ------ | -------------------------------------------------------- |
+| 対象システム | Workers API / アプリLXC（systemd）/ 管理LXC（Caddy / cloudflared）|
+| Workers | JSON構造化ログ（`console.log`）→ Cloudflare Workers Logs        |
+| インフラ   | systemd journal / Caddyアクセスログ                           |
+| 保持期間   | Workers Logs: 7日（無料枠）/ systemd: 永続化設定を推奨              |
+| 禁止事項   | Proxmox APIトークンのログ出力禁止                                  |
 
 ---
 
 # 1️⃣ ログ分類
 
-| 種別              | 対象                       | 確認方法                              | Phase |
-| --------------- | ------------------------ | --------------------------------- | ----- |
-| アプリログ           | 各作品アプリ（stdout / stderr）  | `journalctl -u {app}.service`     | P0    |
-| Caddyアクセスログ     | リクエスト経路                  | `/var/log/caddy/{app}.log`        | P1    |
-| Tunnel接続ログ      | cloudflaredエージェント        | `journalctl -u cloudflared`       | P0    |
-| 操作ログ（Audit）     | 管理UIでの承認・コンテナ操作          | Workers Logs / D1 audit_logs      | P1    |
-| システムログ          | Proxmox / LXC OS         | `/var/log/syslog`, Proxmox GUI    | P0    |
+| 種別           | 対象                    | 確認方法                            |
+| ------------ | ----------------------- | --------------------------------- |
+| APIログ        | Workers（全操作）          | Cloudflare Workers Logs / wrangler tail |
+| アクセスログ       | Caddy（リクエスト経路）         | `/var/log/caddy/{work_name}.log`  |
+| アプリログ        | 各作品アプリ（stdout/stderr）  | `journalctl -u {work_name}.service` |
+| Tunnelログ     | cloudflaredエージェント       | `journalctl -u cloudflared`       |
+| 操作ログ（DB）     | deploy_logsテーブル        | D1クエリ / 管理UI（Phase 3以降）          |
 
 ---
 
-# 2️⃣ アプリログ（systemd journal）
+# 2️⃣ Workers JSONログフォーマット
+
+設計ドキュメント（2.9節）で定義したフォーマットに準拠する。
+
+```json
+{
+  "timestamp": "2025-04-01T10:00:00.000Z",
+  "level": "info",
+  "requestId": "550e8400-e29b-41d4-a716-446655440000",
+  "operation": "deploy.approve",
+  "target": "work_request/req-uuid",
+  "outcome": "success",
+  "durationMs": 3420,
+  "message": "Container deployed: ctid=201 subdomain=my-app.example.dev"
+}
+```
+
+### ログレベル基準
+
+| レベル     | 使用条件                    | 例                              |
+| ------- | ------------------------ | ------------------------------ |
+| `error` | 即座に人間が対応すべき事象           | デプロイ失敗・Proxmox API接続不能        |
+| `warn`  | 注意が必要だが自動復旧する           | Caddy reload リトライ成功            |
+| `info`  | 正常な操作ログ（全API操作）         | 申請作成・承認・コンテナ停止               |
+| `debug` | 開発時のみ有効化               | Proxmox APIレスポンス詳細            |
+
+### Workers実装例
+
+```typescript
+// middleware/logger.ts
+export const loggerMiddleware = (): MiddlewareHandler => async (c, next) => {
+  const start = Date.now()
+  const requestId = crypto.randomUUID()
+  c.set('requestId', requestId)
+
+  await next()
+
+  console.log(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    level: c.res.status >= 500 ? 'error' : 'info',
+    requestId,
+    operation: `${c.req.method} ${c.req.path}`,
+    outcome: c.res.status < 400 ? 'success' : 'failure',
+    durationMs: Date.now() - start,
+    statusCode: c.res.status,
+  }))
+}
+```
+
+---
+
+# 3️⃣ アプリログ（systemd journal）
 
 ```bash
 # リアルタイム確認
-journalctl -u {app_name}.service -f
+journalctl -u {work_name}.service -f
 
 # 最新100行
-journalctl -u {app_name}.service -n 100
-
-# 特定日時以降
-journalctl -u {app_name}.service --since "2025-01-01 00:00:00"
+journalctl -u {work_name}.service -n 100
 
 # エラーのみ
-journalctl -u {app_name}.service -p err
+journalctl -u {work_name}.service -p err
+
+# 特定日時以降
+journalctl -u {work_name}.service --since "2025-01-01 00:00:00"
 ```
 
 ### journaldの永続化設定（各LXC内）
@@ -52,12 +103,12 @@ systemctl restart systemd-journald
 
 ---
 
-# 3️⃣ Caddyアクセスログ設定
+# 4️⃣ Caddyアクセスログ設定
 
 ```caddy
-{app_name}.jyogiverse.dev {
+{work_name}.example.dev {
     log {
-        output file /var/log/caddy/{app_name}.access.log {
+        output file /var/log/caddy/{work_name}.access.log {
             roll_size 10mb
             roll_keep 5
         }
@@ -67,99 +118,68 @@ systemctl restart systemd-journald
 }
 ```
 
-### ログフォーマット例
-
-```json
-{
-  "ts": 1704067200.123,
-  "request": {
-    "method": "GET",
-    "host": "myapp.jyogiverse.dev",
-    "uri": "/api/data",
-    "remote_addr": "xxx.xxx.xxx.xxx",
-    "user_agent": "Mozilla/5.0 ..."
-  },
-  "status": 200,
-  "size": 1234,
-  "duration": 0.012
-}
-```
-
 ---
 
-# 4️⃣ 操作ログ（Audit Log）設計
+# 5️⃣ 障害通知（Discord）
 
-管理UIでの操作はCloudflare Workers Logsに出力し、Phase 2以降でD1の`audit_logs`テーブルにも記録する。
+systemdの `OnFailure=` でプロセス障害時にDiscordへ通知する。
 
-### Workers側の出力例（TypeScript）
-
-```typescript
-// 承認操作のログ
-console.log(JSON.stringify({
-  level: "INFO",
-  action: "approve_application",
-  application_id: id,
-  app_name: application.app_name,
-  admin_email: maskEmail(adminEmail),  // xxx@gmail.com → xxx@***
-  timestamp: new Date().toISOString()
-}))
-
-// コンテナ操作のログ
-console.log(JSON.stringify({
-  level: "INFO",
-  action: "container_stop",
-  container_id: id,
-  lxc_id: container.lxc_id,
-  admin_email: maskEmail(adminEmail),
-  timestamp: new Date().toISOString()
-}))
+```ini
+# /etc/systemd/system/{work_name}.service
+[Unit]
+OnFailure=notify-discord@%n.service
 ```
 
-### D1 audit_logsテーブル（Phase 2以降）
+```ini
+# /etc/systemd/system/notify-discord@.service
+[Unit]
+Description=Discord通知: %i 障害
 
-```sql
-CREATE TABLE audit_logs (
-    id TEXT PRIMARY KEY,
-    admin_id TEXT NOT NULL,        -- 操作した管理者のmembers.id
-    action TEXT NOT NULL,          -- "approve", "reject", "start", "stop", "delete"
-    target_type TEXT NOT NULL,     -- "application", "container"
-    target_id TEXT NOT NULL,       -- 操作対象のID
-    detail TEXT,                   -- 補足情報（JSON文字列）
-    created_at TEXT NOT NULL       -- ISO 8601
-);
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/notify-discord.sh "%i"
 ```
-
----
-
-# 5️⃣ Workers Logsのリアルタイム確認
 
 ```bash
-# wrangler tailでリアルタイム確認（開発・デバッグ時）
+# /usr/local/bin/notify-discord.sh
+#!/bin/bash
+SERVICE=$1
+curl -s -H "Content-Type: application/json" \
+  -d "{\"content\": \"⚠️ **${SERVICE}** がクラッシュしました。systemdが自動再起動します。\"}" \
+  "${DISCORD_WEBHOOK_URL}"
+```
+
+---
+
+# 6️⃣ 操作ログ（D1 deploy_logs）
+
+管理UIでの承認・コンテナ操作はD1の `deploy_logs` テーブルに記録する。
+
+```typescript
+// services/deploy.ts 内での記録例
+await db.prepare(`
+  INSERT INTO deploy_logs (log_id, request_id, action, status, message, created_at)
+  VALUES (?, ?, ?, ?, ?, ?)
+`).bind(
+  crypto.randomUUID(),
+  requestId,
+  'deploy',
+  success ? 'success' : 'failure',
+  message,
+  new Date().toISOString()
+).run()
+```
+
+---
+
+# 7️⃣ Workers Logsのリアルタイム確認
+
+```bash
+# 開発・デバッグ時
 wrangler tail --env production
 ```
 
-Cloudflareダッシュボード → Workers & Pages → {Worker名} → Logs からも確認可能（7日間保持）。
-
----
-
-# 6️⃣ マスキングポリシー
-
-| 対象          | 方針                            |
-| ----------- | ------------------------------- |
-| メールアドレス     | ローカル部を `xxx` に置換（`xxx@domain.com`） |
-| GitHubトークン  | 絶対出力禁止                        |
-| IPアドレス      | Caddyログのみ記録。Workers Logsには含めない |
-
----
-
-# 7️⃣ アラート・監視方針
-
-| 監視項目              | Phase 1（手動）              | Phase 3以降（自動化）      |
-| ----------------- | ------------------------- | ------------------- |
-| アプリプロセス停止         | systemdが自動再起動。失敗時はjournalに記録 | 管理UIのステータスバッジで即時確認  |
-| Proxmoxサーバー死活     | 定期的に手動確認                  | Cloudflare監視の活用を検討  |
-| ディスク残量            | 月1回程度手動確認                 | 管理UIに残量表示を追加        |
-| Tunnel接続断         | cloudflaredの自動再接続に依存       | Workers Logsで確認     |
+Cloudflareダッシュボード → Workers & Pages → Workers API → Logs でも確認可能（7日間保持）。
 
 ---
 
@@ -168,18 +188,18 @@ Cloudflareダッシュボード → Workers & Pages → {Worker名} → Logs か
 ```text
 Phase 1（インフラ基盤）:
 - systemd journal でアプリログ確認（journalctl コマンド）
-- Workers console.log で管理UI操作確認
-- Tunnel / Caddy のシステムログを手動確認
+- journaldの永続化設定
+- cloudflared・Caddyのシステムログ確認
 
-Phase 2（スクリプト整備）:
+Phase 2（スクリプト・IaC）:
 - Caddyアクセスログを有効化
-- D1にaudit_logsテーブル追加
-- Workers側でaudit_logsへの書込みを実装
+- Discord障害通知の設定
 
 Phase 3（管理UI）:
-- 管理UIからジャーナルログを確認できる画面を追加
-- Slack通知（承認・コンテナ障害）を実装
+- Workers JSONログの実装（loggerMiddleware）
+- deploy_logsテーブルへの記録開始
+- wrangler tail での運用監視
 
 Phase 4以降:
-- 集約ログ基盤の検討（ログ量が増えた場合）
+- 管理UIからdeploy_logsを参照できる画面を追加
 ```

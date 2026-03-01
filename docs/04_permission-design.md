@@ -1,121 +1,66 @@
 # 🔐 権限設計：jyogiverse
 
----
-
-# 0️⃣ 設計前提
-
-| 項目      | 内容                                  |
-| ------- | ------------------------------------- |
-| 権限モデル   | RBAC（シンプル3ロール）                       |
-| マルチテナント | なし（単一サークル）                           |
-| 認証方式    | Cloudflare Access（Google認証）           |
-| スコープ単位  | Global（サービス全体）                       |
-| MVP方針   | Phase 3は ADMIN / MEMBER / PUBLIC の3ロール |
+> **認証・ログイン機能は現フェーズのスコープ外。**
+> Phase 3管理UIの初期実装では、アプリ内に認証ロジックを持たない。
 
 ---
 
-# 1️⃣ ロール定義
+# 0️⃣ 設計方針
 
-| ロール名   | レベル | 説明                                |
-| ------ | --- | --------------------------------- |
-| ADMIN  | 100 | 管理者（柳井）。全操作可能。Cloudflare Accessで個別指定。 |
-| MEMBER | 10  | サークルメンバー。申請送信・自分の申請状況確認のみ。       |
-| PUBLIC | 0   | 未認証・一般閲覧者。公開ページのみ閲覧可能。            |
-
----
-
-# 2️⃣ 画面アクセス制御
-
-| 画面                 | PUBLIC | MEMBER | ADMIN |
-| ------------------- | ------ | ------ | ----- |
-| 作品一覧（公開）            | ✅      | ✅      | ✅     |
-| 申請フォーム              | ✅      | ✅      | ✅     |
-| 申請状況確認（自分の申請のみ）     | ❌      | ✅      | ✅     |
-| 管理者ダッシュボード          | ❌      | ❌      | ✅     |
-| 申請一覧（全員分）           | ❌      | ❌      | ✅     |
-| 申請詳細・承認 / 却下        | ❌      | ❌      | ✅     |
-| コンテナ一覧・詳細           | ❌      | ❌      | ✅     |
-| コンテナ起動 / 停止 / 削除    | ❌      | ❌      | ✅     |
+| 項目      | 内容                                              |
+| ------- | ------------------------------------------------ |
+| 認証方式    | **アプリ内に認証ロジックなし**。`/admin` 配下はCloudflare Accessで外部保護。 |
+| 権限モデル   | RBAC（将来フェーズで実装）。現フェーズはスコープ外。                    |
+| 申請フォーム  | 誰でもアクセス可能（URLを知っているメンバーが使用）                    |
+| 管理者画面   | Cloudflare Access（Google認証）で保護。アプリはCloudflareのヘッダーを信頼するだけ。 |
 
 ---
 
-# 3️⃣ 操作権限マトリクス
+# 1️⃣ アクセス制御（現フェーズ）
 
-| 操作                    | PUBLIC | MEMBER | ADMIN |
-| --------------------- | ------ | ------ | ----- |
-| 作品一覧閲覧                | ✅      | ✅      | ✅     |
-| 申請送信                  | ✅      | ✅      | ✅     |
-| 自分の申請ステータス確認          | ❌      | ✅      | ✅     |
-| 申請一覧閲覧（全員分）           | ❌      | ❌      | ✅     |
-| 申請承認 / 却下             | ❌      | ❌      | ✅     |
-| コンテナ作成 / 削除           | ❌      | ❌      | ✅     |
-| コンテナ起動 / 停止 / 再起動     | ❌      | ❌      | ✅     |
-| Caddyルーティング変更         | ❌      | ❌      | ✅     |
-| メンバー管理                | ❌      | ❌      | ✅     |
+| パス              | アクセス制御               | 備考                            |
+| --------------- | ---------------------- | ------------------------------- |
+| `/apply`        | 誰でもアクセス可              | サークルメンバーへURLを周知して使用           |
+| `/apply/done`   | 誰でもアクセス可              |                                 |
+| `/admin`        | Cloudflare Accessで保護   | Google認証。管理者メールアドレスを登録        |
+| `/admin/*`      | Cloudflare Accessで保護   | 全管理画面を一括保護                    |
+| `/api/requests` (GET/POST) | Cloudflare Access不要 | `POST` は申請フォームから呼ばれる |
+| `/api/requests/:id/*` | Cloudflare Accessで保護 | 承認・却下APIは管理者のみ              |
+| `/api/containers/*` | Cloudflare Accessで保護 | コンテナ操作APIは管理者のみ           |
 
 ---
 
-# 4️⃣ 認証フロー
+# 2️⃣ Cloudflare Access設定方針
 
-```mermaid
-flowchart LR
-    Request[リクエスト]
-    Public{公開パス?}
-    CFAccess[Cloudflare Access]
-    Role{ロール確認}
-    Admin[ADMIN処理]
-    Member[MEMBER処理]
-
-    Request --> Public
-    Public -->|Yes| Show[そのまま表示]
-    Public -->|No| CFAccess
-    CFAccess --> Role
-    Role -->|ADMIN| Admin
-    Role -->|MEMBER| Member
-    Role -->|未登録| Deny[403 Forbidden]
-```
+| 設定項目       | 内容                                    |
+| ---------- | --------------------------------------- |
+| 認証プロバイダー   | Google（柳井のGoogleアカウント）                 |
+| 保護対象パス     | `/admin/*`、`/api/requests/:id/*`、`/api/containers/*` |
+| 保護対象外パス    | `/apply`、`/apply/done`、`/api/requests`（POST） |
+| 管理者特定      | Cloudflare Accessのポリシーで特定メールアドレスを許可    |
 
 ---
 
-# 5️⃣ Cloudflare Access設定方針
+# 3️⃣ アプリ側の実装（Workers）
 
-| 設定項目         | 内容                                       |
-| ------------ | ---------------------------------------- |
-| 認証プロバイダー     | Google（各自のGoogleアカウント）                   |
-| 管理者メール       | 柳井のGmailアドレスを固定登録                        |
-| メンバー許可範囲     | メールアドレスを個別登録（サークルメンバーのみ）                 |
-| 公開パス（認証不要）   | `/`、`/apply`、`/*.jyogiverse.dev`（各作品URL） |
-| 保護パス（認証必須）   | `/status`、`/admin/*`                     |
-
----
-
-# 6️⃣ Workers側の認証チェック（サーバー最終判定）
+Cloudflare Accessを通過したリクエストにはヘッダーが付与される。アプリはそれを信頼するだけ。
 
 ```typescript
-// Cloudflare Workers（Hono）での権限確認
-app.use('/admin/*', async (c, next) => {
-  const email = c.req.header('Cf-Access-Authenticated-User-Email')
-  if (!email) return c.json({ error: 'Unauthorized' }, 401)
-
-  const member = await db.query.members.findFirst({
-    where: eq(members.email, email)
-  })
-  if (!member || member.role !== 'ADMIN') {
-    return c.json({ error: 'Forbidden' }, 403)
-  }
-
-  c.set('member', member)
-  await next()
-})
+// Cloudflare Accessが付与するヘッダーを読むだけ
+// アプリ内でトークン検証等は行わない
+const adminEmail = c.req.header('Cf-Access-Authenticated-User-Email')
+// → 管理者操作のログ記録にのみ使用
 ```
 
 ---
 
-# 7️⃣ フロントエンド制御
+# 4️⃣ 将来フェーズでの認証実装計画
 
-| パターン     | 説明                                        |
-| -------- | ----------------------------------------- |
-| 非表示      | 管理者メニュー・承認ボタンはADMINのみ表示                   |
-| リダイレクト   | 未認証アクセスはCloudflare Accessが自動的にログイン画面へ     |
+現フェーズが安定した後に以下を追加する。
 
-※ フロントはUX制御のみ。最終判定は必ずWorkers側（サーバー）で実施。
+| 項目         | 内容                                       |
+| ---------- | ---------------------------------------- |
+| メンバー認証     | Cloudflare AccessのOIDCトークンをアプリで検証        |
+| RBACロール定義  | ADMIN / MEMBER の2ロールをD1のmembersテーブルで管理  |
+| 申請フォーム認証   | メンバーのみ申請可能にする（現状は誰でも可）                  |
+| 申請状況確認ページ  | `/status`（自分の申請のみ確認できるメンバー向けページ）        |
