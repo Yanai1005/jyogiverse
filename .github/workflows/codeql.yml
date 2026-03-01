@@ -26,7 +26,7 @@ jobs:
     outputs:
       has_source: ${{ steps.check.outputs.has_source }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Check for TypeScript source
         id: check
         run: |
@@ -55,7 +55,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
