@@ -4,13 +4,43 @@ on:
   push:
     branches:
       - main
+    paths:
+      - "src/**"
+      - "package.json"
+      - "package-lock.json"
   pull_request:
     branches:
       - main
+    paths:
+      - "src/**"
+      - "package.json"
+      - "package-lock.json"
+  schedule:
+    # 毎週月曜 09:00 JST（00:00 UTC）に定期スキャン
+    - cron: "0 0 * * 1"
 
 jobs:
+  check-source:
+    name: Check source exists
+    runs-on: ubuntu-latest
+    outputs:
+      has_source: ${{ steps.check.outputs.has_source }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for TypeScript source
+        id: check
+        run: |
+          if find src -name "*.ts" -o -name "*.tsx" 2>/dev/null | grep -q .; then
+            echo "has_source=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_source=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::src/ に TS ファイルが見つかりません。CodeQL をスキップします。"
+          fi
+
   analyze:
     name: CodeQL Analyze
+    needs: check-source
+    if: needs.check-source.outputs.has_source == 'true'
     runs-on: ubuntu-latest
     permissions:
       actions: read
