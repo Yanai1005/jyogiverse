@@ -1,0 +1,35 @@
+name: Sync Labels
+on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'テスト実行モード: 実際の変更は行わず、実行内容のみ確認'
+        required: false
+        type: boolean
+        default: false
+      allow-added-labels:
+        description: 'リポジトリ独自ラベルを保持: labels.jsonで未定義のラベルを削除しない'
+        required: false
+        type: boolean
+        default: false
+jobs:
+  sync-labels:
+    permissions:
+      contents: read
+      issues: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+      - name: Install dependencies
+        run: yarn add -D @azu/github-label-setup
+      - name: Run github-label-setup
+        run: |
+          COMMAND="yarn github-label-setup --token ${{ secrets.GITHUB_TOKEN }} --labels .github/labels.json"
+          if [[ "${{ inputs.dry-run }}" == "true" ]]; then
+            COMMAND="$COMMAND --dry-run"
+          fi
+          if [[ "${{ inputs.allow-added-labels }}" == "true" ]]; then
+            COMMAND="$COMMAND --allow-added-labels"
+          fi
+          eval "$COMMAND"
